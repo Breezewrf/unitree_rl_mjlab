@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +38,34 @@ class TrainConfig:
     env_cfg = load_env_cfg(task_id)
     agent_cfg = load_rl_cfg(task_id)
     return TrainConfig(env=env_cfg, agent=agent_cfg)
+
+
+def _yaml_safe(value: object) -> object:
+  """Convert nested config values into YAML-serializable primitives.
+
+  Runtime config dictionaries can be mutated by RSL-RL and may include
+  non-serializable objects (e.g. env handles under symmetry settings).
+  """
+  if value is None or isinstance(value, (bool, int, float, str)):
+    return value
+  if isinstance(value, Path):
+    return str(value)
+  if isinstance(value, Mapping):
+    out: dict[str, object] = {}
+    for key, item in value.items():
+      if isinstance(key, str) and key.startswith("_"):
+        continue
+      out[str(key)] = _yaml_safe(item)
+    return out
+  if isinstance(value, list):
+    return [_yaml_safe(item) for item in value]
+  if isinstance(value, tuple):
+    return tuple(_yaml_safe(item) for item in value)
+  if callable(value):
+    module = getattr(value, "__module__", "")
+    qualname = getattr(value, "__qualname__", getattr(value, "__name__", "callable"))
+    return f"{module}:{qualname}" if module else qualname
+  return repr(value)
 
 
 def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
@@ -133,7 +162,7 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
   # Only write config files from rank 0 to avoid race conditions.
   if rank == 0:
     dump_yaml(log_dir / "params" / "env.yaml", env_cfg)
-    dump_yaml(log_dir / "params" / "agent.yaml", agent_cfg)
+    dump_yaml(log_dir / "params" / "agent.yaml", cast(dict, _yaml_safe(agent_cfg)))
 
   runner.learn(
     num_learning_iterations=cfg.agent.max_iterations, init_at_random_ep_len=True

@@ -4,6 +4,7 @@ from mjlab.rl import (
   RslRlModelCfg,
   RslRlOnPolicyRunnerCfg,
   RslRlPpoAlgorithmCfg,
+  RslRlSymmetryCfg,
 )
 
 
@@ -38,6 +39,15 @@ def unitree_g1_23dof_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       lam=0.95,
       desired_kl=0.01,
       max_grad_norm=1.0,
+      # Symmetry augmentation + mirror-consistency loss for bipedal locomotion.
+      symmetry_cfg=RslRlSymmetryCfg(
+        use_data_augmentation=True,
+        data_augmentation_func=(
+          "src.tasks.velocity.rl.symmetry:g1_23dof_symmetry_augmentation"
+        ),
+        use_mirror_loss=True,
+        mirror_loss_coeff=0.1,
+      ),
     ),
     experiment_name="g1_23dof_velocity",
     save_interval=100,
