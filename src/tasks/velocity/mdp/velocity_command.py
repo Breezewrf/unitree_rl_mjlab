@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -45,6 +46,16 @@ class UniformVelocityCommand(CommandTerm):
 
     self.metrics["error_vel_xy"] = torch.zeros(self.num_envs, device=self.device)
     self.metrics["error_vel_yaw"] = torch.zeros(self.num_envs, device=self.device)
+
+    self._recovery_root_states: torch.Tensor | None = None
+    if self.cfg.recovery_state_file is not None:
+      if not os.path.exists(self.cfg.recovery_state_file):
+        raise FileNotFoundError(
+          f"Can't find file: {self.cfg.recovery_state_file}"
+        )
+      self._recovery_root_states = self._load_recovery_root_states(
+        self.cfg.recovery_state_file
+      )
 
     # Set by create_gui() when the viewer is active.
     self._joystick_enabled: viser.GuiCheckboxHandle | None = None
@@ -95,6 +106,67 @@ class UniformVelocityCommand(CommandTerm):
         [root_pos, root_quat, root_lin_vel_w, root_ang_vel_b], dim=-1
       )
       self.robot.write_root_state_to_sim(root_state, init_vel_env_ids)
+
+    # Recovery root-state reset is sampled independently from velocity init.
+    reset_recovery_mask = self._sample_recovery_mask(len(env_ids))
+    recovery_env_ids = env_ids[reset_recovery_mask]
+    if len(recovery_env_ids) > 0:
+      if self._recovery_root_states is None:
+        print(
+          f"[INFO] {len(recovery_env_ids)} recovery resets sampled but recovery_state_file is not set."
+        )
+      else:
+        sampled_recovery_root_state = self._sample_recovery_root_states(
+          len(recovery_env_ids)
+        )
+        self.robot.write_root_state_to_sim(
+          sampled_recovery_root_state, recovery_env_ids
+        )
+    #     print(
+    #       f"[INFO] {len(recovery_env_ids)} / {len(env_ids)} envs reset from recovery root states."
+    #     )
+    # else:
+    #   print(f"[INFO] No recovery resets sampled for {len(env_ids)} envs.")
+
+  def _sample_recovery_mask(self, num_envs: int) -> torch.Tensor:
+    weights = torch.tensor(self.cfg.standing_task_weight, device=self.device)
+    sampled = torch.multinomial(weights, num_samples=num_envs, replacement=True)
+    return sampled.bool()
+
+  def _sample_recovery_root_states(self, num_samples: int) -> torch.Tensor:
+    assert self._recovery_root_states is not None
+    sample_ids = torch.randint(
+      low=0,
+      high=self._recovery_root_states.shape[0],
+      size=(num_samples,),
+      device=self.device,
+    )
+    return self._recovery_root_states[sample_ids]
+
+  def _load_recovery_root_states(self, state_file: str) -> torch.Tensor:
+    raw = torch.load(state_file, map_location=self.device)
+    if isinstance(raw, dict):
+      if "robot_root_states_xyzw" in raw:
+        root_states = raw["robot_root_states_xyzw"]
+      elif "root_state" in raw:
+        root_states = raw["root_state"]
+      elif "root_states" in raw:
+        root_states = raw["root_states"]
+      else:
+        raise ValueError(
+          "Recovery state file must contain one of: "
+          "robot_root_states_xyzw, root_state, root_states."
+        )
+    else:
+      root_states = raw
+
+    root_states = torch.as_tensor(root_states, dtype=torch.float32, device=self.device)
+    if root_states.ndim != 2 or root_states.shape[1] != 13:
+      raise ValueError(
+        "Recovery root states must have shape (N, 13), got "
+        f"{tuple(root_states.shape)}."
+      )
+    return root_states
 
   def _update_command(self) -> None:
     if self.cfg.heading_command:
@@ -254,6 +326,8 @@ class UniformVelocityCommandCfg(CommandTermCfg):
   rel_standing_envs: float = 0.0
   rel_heading_envs: float = 1.0
   init_velocity_prob: float = 0.0
+  recovery_state_file: str | None = None
+  standing_task_weight: tuple[float, float] = (1.0, 0.0)
 
   @dataclass
   class Ranges:
@@ -280,3 +354,7 @@ class UniformVelocityCommandCfg(CommandTermCfg):
         "The velocity command has heading commands active (heading_command=True) but "
         "the `ranges.heading` parameter is set to None."
       )
+    if any(weight < 0.0 for weight in self.standing_task_weight):
+      raise ValueError("standing_task_weight must be non-negative.")
+    if sum(self.standing_task_weight) <= 0.0:
+      raise ValueError("standing_task_weight must have a positive sum.")

@@ -23,14 +23,13 @@ from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.scene import SceneCfg
 from mjlab.sensor import GridPatternCfg, ObjRef, RayCastSensorCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
-from mjlab.tasks.velocity import mdp
-from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
+from src.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.terrains import TerrainEntityCfg
 from mjlab.terrains.config import ROUGH_TERRAINS_CFG
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 from mjlab.viewer import ViewerConfig
-
 import src.tasks.velocity.mdp as mdp
+
 
 
 def make_velocity_env_cfg() -> ManagerBasedRlEnvCfg:
@@ -176,6 +175,8 @@ def make_velocity_env_cfg() -> ManagerBasedRlEnvCfg:
         ang_vel_z=(-1.0, 1.0),
         heading=(-math.pi, math.pi),
       ),
+      recovery_state_file="",  # Set per-robot.
+      standing_task_weight=(1.0, 0.0),  # Override per-robot.
     )
   }
 
