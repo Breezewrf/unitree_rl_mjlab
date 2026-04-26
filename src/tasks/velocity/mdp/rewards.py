@@ -84,6 +84,88 @@ def body_orientation_l2(
   return xy_squared
 
 
+def penalty_xy_rate_before_stand(
+  env: ManagerBasedRlEnv,
+  max_tilt_deg: float = 18.0,
+  min_base_height: float = 0.55,
+  xy_speed_threshold: float = 0.10,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Penalize horizontal base motion while the robot is not standing.
+
+  This discourages "worm-like" crawling/sliding from fallen poses and pushes the
+  policy to recover upright posture first, then move in xy.
+  """
+  asset: Entity = env.scene[asset_cfg.name]
+
+  tilt = torch.acos(-asset.data.projected_gravity_b[:, 2]).abs()
+  max_tilt_rad = torch.deg2rad(torch.tensor(max_tilt_deg, device=env.device))
+  is_upright = tilt < max_tilt_rad
+  is_tall_enough = asset.data.root_link_pos_w[:, 2] > min_base_height
+  is_standing = is_upright & is_tall_enough
+
+  xy_speed = torch.norm(asset.data.root_link_lin_vel_b[:, :2], dim=1)
+  crawl_speed = torch.clamp(xy_speed - xy_speed_threshold, min=0.0)
+  return torch.square(crawl_speed) * (~is_standing).float()
+
+
+def stand_up_progress_reward(
+  env: ManagerBasedRlEnv,
+  max_tilt_deg: float = 18.0,
+  min_base_height: float = 0.55,
+  progress_height: float = 0.05,
+  vertical_velocity_threshold: float = 0.5,
+  sensor_name: str | None = None,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Reward bounded stand-up progress while not yet standing.
+
+  The reward is gated by uprightness and ground support to avoid exploiting the
+  objective by jumping the torso upward while the rest of the body stays down.
+  """
+  asset: Entity = env.scene[asset_cfg.name]
+
+  base_height = asset.data.root_link_pos_w[:, 2]
+  cos_tilt = torch.clamp(-asset.data.projected_gravity_b[:, 2], -1.0, 1.0)
+  tilt = torch.acos(cos_tilt)
+
+  max_tilt_rad = torch.deg2rad(torch.tensor(max_tilt_deg, device=env.device))
+  is_upright = tilt < max_tilt_rad
+  is_tall_enough = base_height > min_base_height
+  is_standing = is_upright & is_tall_enough
+
+  upright_score = torch.clamp(1.0 - (tilt / max_tilt_rad), min=0.0, max=1.0)
+
+  support_score = torch.ones_like(base_height)
+  if sensor_name is not None:
+    contact_sensor = env.scene[sensor_name]
+    assert isinstance(contact_sensor, ContactSensor)
+    if contact_sensor.data.found is not None:
+      support_score = torch.mean((contact_sensor.data.found > 0).float(), dim=1)
+
+  prev_key = "stand_up_progress_prev_base_height"
+  prev_base_height = getattr(env, prev_key, None)
+  if prev_base_height is None or prev_base_height.shape != base_height.shape:
+    prev_base_height = torch.zeros_like(base_height)
+
+  reset_mask = env.episode_length_buf == 0
+  prev_base_height = torch.where(reset_mask, base_height, prev_base_height)
+
+  height_gain = torch.clamp(base_height - prev_base_height, min=0.0)
+  height_gain = torch.clamp(height_gain / progress_height, min=0.0, max=1.0)
+  setattr(env, prev_key, base_height)
+
+  vertical_velocity = torch.abs(asset.data.root_link_lin_vel_w[:, 2])
+  vertical_velocity_penalty = torch.clamp(
+    vertical_velocity - vertical_velocity_threshold, min=0.0
+  )
+
+  progress_reward = height_gain * upright_score * support_score
+  progress_reward = progress_reward * (~is_standing).float()
+
+  return progress_reward - 0.25 * torch.square(vertical_velocity_penalty)
+  
+
 def self_collision_cost(
   env: ManagerBasedRlEnv,
   sensor_name: str,
@@ -426,3 +508,23 @@ def stand_still(
             reward *= scale
     return reward
 
+def penalty_electrical_power_cost(
+  env: ManagerBasedRlEnv,
+  asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+  """Penalize electrical power consumption of actuators."""
+
+  asset: Entity = env.scene[asset_cfg.name]
+
+  joint_ids, _ = asset.find_joints(asset_cfg.joint_names)
+  actuator_ids, _ = asset.find_actuators(asset_cfg.joint_names)
+
+  tau = asset.data.actuator_force[:, actuator_ids]
+  qd = asset.data.joint_vel[:, joint_ids]
+
+  mech = - tau * qd - 150
+  mech_pos = torch.clamp(mech, min=0.0)  # ignore regenerative power
+
+  cost = torch.sum((mech_pos / 500)**2, dim=1)
+
+  return cost

@@ -7,11 +7,13 @@ from src.assets.robots import (
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs import mdp as envs_mdp
 from mjlab.envs.mdp.actions import JointPositionActionCfg
+from mjlab.managers.curriculum_manager import CurriculumTermCfg
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg, RayCastSensorCfg
 from mjlab.tasks.velocity import mdp
 from src.tasks.velocity.mdp import UniformVelocityCommandCfg
+from src.tasks.velocity import mdp as custom_mdp
 from src.tasks.velocity.velocity_env_cfg import make_velocity_env_cfg
 
 
@@ -174,6 +176,13 @@ def unitree_g1_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg.sim.contact_sensor_maxmatch = 64
   cfg.sim.nconmax = None
 
+  # fall-Recovery
+  cfg.commands["twist"].recovery_state_file = "src/assets/motions/g1/robot_init_states_8192.pth"
+  cfg.commands["twist"].standing_task_weight = (0.9, 0.1)
+  
+  # cfg.rewards["penalty_xy_rate_before_stand"] = None
+
+
   # Switch to flat terrain.
   assert cfg.scene.terrain is not None
   cfg.scene.terrain.terrain_type = "plane"
@@ -189,11 +198,94 @@ def unitree_g1_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # Disable terrain curriculum (not present in play mode since rough clears all).
   cfg.curriculum.pop("terrain_levels", None)
 
+  if not play and False:
+    cfg.curriculum.pop("command_vel", None)
+    cfg.curriculum["standup_tracking"] = CurriculumTermCfg(
+      func=custom_mdp.standup_then_track_vel,
+      params={
+        "command_name": "twist",
+        "stand_success": {
+          "max_tilt_deg": 18.0,
+          "min_base_height": 0.55,
+          "ema_alpha": 0.05,
+        },
+        "stage2_transition": {
+          "min_steps": 1000 * 24,
+          "stand_success_threshold": 0.75,
+        },
+        "stage1_velocity_stages": [
+          {
+            "step": 0,
+            "lin_vel_x": (-0.05, 0.05),
+            "lin_vel_y": (-0.05, 0.05),
+            "ang_vel_z": (-0.10, 0.10),
+          },
+        ],
+        "stage2_velocity_stages": [
+          {
+            "step": 0,
+            "lin_vel_x": (-0.50, 1.00),
+            "lin_vel_y": (-0.50, 0.50),
+            "ang_vel_z": (-0.60, 0.60),
+          },
+          {
+            "step": 5000 * 24,
+            "lin_vel_x": (-1.00, 2.00),
+            "lin_vel_y": (-1.00, 1.00),
+            "ang_vel_z": (-1.00, 1.00),
+          },
+        ],
+        "stage1_recovery_stages": [
+          {"step": 0, "recovery_prob": 0.95},
+          {"step": 2000 * 24, "recovery_prob": 0.80},
+          {"step": 5000 * 24, "recovery_prob": 0.70},
+        ],
+        "stage2_recovery_stages": [
+          {"step": 0, "recovery_prob": 0.50},
+          {"step": 2000 * 24, "recovery_prob": 0.30},
+          {"step": 5000 * 24, "recovery_prob": 0.10},
+          {"step": 10000 * 24, "recovery_prob": 0.00},
+        ],
+        "stage1_reward_weight_stages": {
+          "track_linear_velocity": [
+            {"step": 0, "weight": 0.10},
+            {"step": 2000 * 24, "weight": 0.30},
+          ],
+          "track_angular_velocity": [
+            {"step": 0, "weight": 0.10},
+            {"step": 2000 * 24, "weight": 0.30},
+          ],
+          "pose": [
+            {"step": 0, "weight": 3.00},
+            {"step": 2000 * 24, "weight": 2.00},
+          ],
+          "body_orientation_l2": [{"step": 0, "weight": -2.00}],
+          "stand_still": [{"step": 0, "weight": -2.00}],
+        },
+        "stage2_reward_weight_stages": {
+          "track_linear_velocity": [
+            {"step": 0, "weight": 1.00},
+            {"step": 5000 * 24, "weight": 1.25},
+          ],
+          "track_angular_velocity": [
+            {"step": 0, "weight": 1.00},
+            {"step": 5000 * 24, "weight": 1.25},
+          ],
+          "pose": [
+            {"step": 0, "weight": 1.50},
+            {"step": 5000 * 24, "weight": 1.00},
+          ],
+          "body_orientation_l2": [{"step": 0, "weight": -1.00}],
+          "stand_still": [{"step": 0, "weight": -1.00}],
+        },
+      },
+    )
+
   if play:
     twist_cmd = cfg.commands["twist"]
     assert isinstance(twist_cmd, UniformVelocityCommandCfg)
     twist_cmd.ranges.lin_vel_x = (-0.5, 1.0)
     twist_cmd.ranges.lin_vel_y = (-0.5, 0.5)
     twist_cmd.ranges.ang_vel_z = (-0.5, 0.5)
-
+    cfg.terminations["fell_over"] = None
   return cfg

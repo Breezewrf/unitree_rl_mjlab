@@ -275,6 +275,26 @@ def make_velocity_env_cfg() -> ManagerBasedRlEnvCfg:
       weight=-1.0,
       params={"asset_cfg": SceneEntityCfg("robot", body_names=())},  # Set per-robot.
     ),
+    "stand_up_progress": RewardTermCfg(
+      func=mdp.stand_up_progress_reward,
+      weight=5.0,
+      params={
+        "max_tilt_deg": 18.0,
+        "min_base_height": 0.55,
+        "progress_height": 0.05,
+        "vertical_velocity_threshold": 0.5,
+        "sensor_name": "feet_ground_contact",
+      },
+    ),
+    "penalty_xy_rate_before_stand": RewardTermCfg(
+      func=mdp.penalty_xy_rate_before_stand,
+      weight=-2.0,
+      params={
+        "max_tilt_deg": 18.0,
+        "min_base_height": 0.55,
+        "xy_speed_threshold": 0.10,
+      },
+    ),
     "pose": RewardTermCfg(
       func=mdp.variable_posture,
       weight=1.0,
@@ -361,9 +381,16 @@ def make_velocity_env_cfg() -> ManagerBasedRlEnvCfg:
   terminations = {
     "time_out": TerminationTermCfg(func=mdp.time_out, time_out=True),
     "fell_over": TerminationTermCfg(
-      func=mdp.bad_orientation,
-      params={"limit_angle": math.radians(70.0)},
+      func=mdp.bad_orientation_tolerance,
+      params={
+        "limit_angle": math.radians(70.0),
+        "tolerance_time_s": 1.0,
+      },
     ),
+    # "fell_over": TerminationTermCfg(
+    #   func=mdp.bad_orientation,
+    #   params={"limit_angle": math.radians(70.0)},
+    # ),
   }
 
   ##

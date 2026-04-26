@@ -43,6 +43,7 @@ class UniformVelocityCommand(CommandTerm):
       self.num_envs, dtype=torch.bool, device=self.device
     )
     self.is_standing_env = torch.zeros_like(self.is_heading_env)
+    self.is_standing_task_env = torch.zeros_like(self.is_heading_env)
 
     self.metrics["error_vel_xy"] = torch.zeros(self.num_envs, device=self.device)
     self.metrics["error_vel_yaw"] = torch.zeros(self.num_envs, device=self.device)
@@ -109,6 +110,7 @@ class UniformVelocityCommand(CommandTerm):
 
     # Recovery root-state reset is sampled independently from velocity init.
     reset_recovery_mask = self._sample_recovery_mask(len(env_ids))
+    self.is_standing_task_env[env_ids] = reset_recovery_mask
     recovery_env_ids = env_ids[reset_recovery_mask]
     if len(recovery_env_ids) > 0:
       if self._recovery_root_states is None:
