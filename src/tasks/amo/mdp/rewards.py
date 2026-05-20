@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
 
 from mjlab.entity import Entity
@@ -425,4 +426,44 @@ def stand_still(
             scale = (total_command <= command_threshold).float()
             reward *= scale
     return reward
+
+
+def amo_ref_tracking(
+    env: ManagerBasedRlEnv,
+    command_name: str,
+    std: float,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Reward tracking the AMO MLP lower-body reference joint angles.
+
+    Runs the MLP to predict lower-body reference from (q_upper, rpy, h),
+    then returns a Gaussian reward based on the L2 error between the
+    current lower-body joint positions and the reference.
+    """
+    amo_module = getattr(env, "_amo_module", None)
+    if amo_module is None:
+        return torch.zeros(env.num_envs, device=env.device)
+
+    asset: Entity = env.scene[asset_cfg.name]
+    joint_pos = asset.data.joint_pos  # (N, n_joints)
+
+    # Current lower-body joint positions.
+    q_lower = joint_pos[:, env._amo_lower_indices]  # (N, 12)
+
+    # MLP inference: (q_upper, rpy, h) → q_lower_ref.
+    q_upper = joint_pos[:, env._amo_upper_indices].cpu().numpy()
+    amo_cmd = env.command_manager.get_command(command_name)
+    rpy_cmd = amo_cmd[:, 3:6].cpu().numpy()
+    h_cmd = amo_cmd[:, 6:7].cpu().numpy()
+
+    x = np.concatenate([q_upper, rpy_cmd, h_cmd], axis=1).astype(np.float32)
+    x = (x - amo_module.in_mean) / amo_module.in_std
+    x_t = torch.from_numpy(x).to(amo_module.device)
+    with torch.no_grad():
+        y_t = amo_module.model(x_t)
+    q_ref = y_t.cpu().numpy() * amo_module.out_std + amo_module.out_mean
+    q_ref_t = torch.from_numpy(q_ref).float().to(env.device)
+
+    error = torch.sum((q_lower - q_ref_t) ** 2, dim=-1)
+    return torch.exp(-error / (2.0 * std ** 2))
 

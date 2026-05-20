@@ -177,6 +177,15 @@ def unitree_g1_rough_env_cfg(
         weight=-1.0,
         params={"sensor_name": self_collision_cfg.name, "force_threshold": 10.0},
     )
+    cfg.rewards["amo_ref_tracking"] = RewardTermCfg(
+        func=mdp.amo_ref_tracking,
+        weight=0.5,
+        params={
+            "command_name": "amo",
+            "std": 0.3,
+            "asset_cfg": SceneEntityCfg("robot"),
+        },
+    )
 
     # Apply play mode overrides.
     if play:
@@ -244,7 +253,7 @@ def unitree_g1_flat_env_cfg(
         params={
             "reward_name": "track_height",
             "weight_stages": [
-                {"step": 1000*24, "weight": 1.0},
+                {"step": 1000*24, "weight": 0.5},
             ],
         },
     )
@@ -253,7 +262,7 @@ def unitree_g1_flat_env_cfg(
         params={
             "reward_name": "track_rpy",
             "weight_stages": [
-                {"step": 4000*24, "weight": 1.0},
+                {"step": 4000*24, "weight": 0.5},
             ],
         },
     )
