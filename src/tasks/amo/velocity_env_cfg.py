@@ -184,8 +184,8 @@ def make_amo_env_cfg() -> ManagerBasedRlEnvCfg:
           heading_control_stiffness=0.5,
           debug_vis=True,
           ranges=AmoCommandCfg.Ranges(
-              lin_vel_x=(-1.0, 2.0),
-              lin_vel_y=(-1.0, 1.0),
+              lin_vel_x=(-0.5, 1.0),
+              lin_vel_y=(-0.5, 0.5),
               ang_vel_z=(-1.0, 1.0),
               heading=(-math.pi, math.pi),
               roll=(-0.0, 0.0),
