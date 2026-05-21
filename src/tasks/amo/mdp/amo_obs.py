@@ -57,10 +57,6 @@ def amo_ref_lower(
     from the AMO command term, runs MLP inference on CPU, and returns the
     predicted lower-body joint angles (12 DOF) in robot joint order.
 
-    Caches the result on ``env._amo_ref_lower_cache`` so that reward
-    functions (``stand_still``, ``amo_ref_tracking``) can reuse it without
-    running the MLP again.
-
     Requires ``env._amo_module`` to be set by a startup event.
     """
     amo_module = getattr(env, "_amo_module", None)
@@ -94,10 +90,6 @@ def amo_ref_lower(
     y = y_t.cpu().numpy() * amo_module.out_std + amo_module.out_mean  # (N, n_lower)
 
     result = torch.from_numpy(y).float().to(env.device)
-
-    # Cache for reward functions to reuse.
-    env._amo_ref_lower_cache = result
-
     return result
 
 
