@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import numpy as np
 import torch
 
 from mjlab.entity import Entity
@@ -409,23 +408,37 @@ class variable_posture:
 
 
 def stand_still(
-        env: ManagerBasedRlEnv,
-        command_name: str,
-        command_threshold: float = 0.1,
-        asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG
+    env: ManagerBasedRlEnv,
+    command_name: str,
+    command_threshold: float = 0.1,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
+    """Penalize deviation from the MLP-predicted reference when standing.
+
+    Uses the cached MLP output from the ``amo_ref_lower`` observation
+    (stored on ``env._amo_ref_lower_cache``) to avoid redundant inference.
+
+    Returns zero for envs whose velocity command exceeds the threshold.
+    """
     asset: Entity = env.scene[asset_cfg.name]
-    diff_angle = asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
-    reward = torch.sum(torch.square(diff_angle), dim=1)
-    if command_name is not None:
-        command = env.command_manager.get_command(command_name)
-        if command is not None:
-            linear_norm = torch.norm(command[:, :2], dim=1)
-            angular_norm = torch.abs(command[:, 2])
-            total_command = linear_norm + angular_norm
-            scale = (total_command <= command_threshold).float()
-            reward *= scale
-    return reward
+    joint_pos = asset.data.joint_pos  # (N, n_joints)
+
+    # Determine standing mask from velocity command.
+    amo_cmd = env.command_manager.get_command(command_name)
+    linear_norm = torch.norm(amo_cmd[:, :2], dim=1)
+    angular_norm = torch.abs(amo_cmd[:, 2])
+    total_command = linear_norm + angular_norm
+    standing_mask = (total_command <= command_threshold).float()
+
+    # Read cached MLP output; fall back to default pose if unavailable.
+    q_ref_t: torch.Tensor | None = getattr(env, "_amo_ref_lower_cache", None)
+    if q_ref_t is None:
+        diff = joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+        return torch.sum(torch.square(diff), dim=1) * standing_mask
+
+    q_lower = joint_pos[:, env._amo_lower_indices]
+    error = torch.sum((q_lower - q_ref_t) ** 2, dim=-1)
+    return error * standing_mask
 
 
 def amo_ref_tracking(
@@ -436,33 +449,15 @@ def amo_ref_tracking(
 ) -> torch.Tensor:
     """Reward tracking the AMO MLP lower-body reference joint angles.
 
-    Runs the MLP to predict lower-body reference from (q_upper, rpy, h),
-    then returns a Gaussian reward based on the L2 error between the
-    current lower-body joint positions and the reference.
+    Uses the cached MLP output from the ``amo_ref_lower`` observation
+    (stored on ``env._amo_ref_lower_cache``) to avoid redundant inference.
     """
-    amo_module = getattr(env, "_amo_module", None)
-    if amo_module is None:
+    q_ref_t: torch.Tensor | None = getattr(env, "_amo_ref_lower_cache", None)
+    if q_ref_t is None:
         return torch.zeros(env.num_envs, device=env.device)
 
     asset: Entity = env.scene[asset_cfg.name]
-    joint_pos = asset.data.joint_pos  # (N, n_joints)
-
-    # Current lower-body joint positions.
-    q_lower = joint_pos[:, env._amo_lower_indices]  # (N, 12)
-
-    # MLP inference: (q_upper, rpy, h) → q_lower_ref.
-    q_upper = joint_pos[:, env._amo_upper_indices].cpu().numpy()
-    amo_cmd = env.command_manager.get_command(command_name)
-    rpy_cmd = amo_cmd[:, 3:6].cpu().numpy()
-    h_cmd = amo_cmd[:, 6:7].cpu().numpy()
-
-    x = np.concatenate([q_upper, rpy_cmd, h_cmd], axis=1).astype(np.float32)
-    x = (x - amo_module.in_mean) / amo_module.in_std
-    x_t = torch.from_numpy(x).to(amo_module.device)
-    with torch.no_grad():
-        y_t = amo_module.model(x_t)
-    q_ref = y_t.cpu().numpy() * amo_module.out_std + amo_module.out_mean
-    q_ref_t = torch.from_numpy(q_ref).float().to(env.device)
+    q_lower = asset.data.joint_pos[:, env._amo_lower_indices]  # (N, 12)
 
     error = torch.sum((q_lower - q_ref_t) ** 2, dim=-1)
     return torch.exp(-error / (2.0 * std ** 2))
