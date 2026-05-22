@@ -441,18 +441,14 @@ def stand_still(
     env: ManagerBasedRlEnv,
     command_name: str,
     command_threshold: float = 0.1,
+    std: float = 0.3,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """Penalize deviation from the MLP-predicted reference when standing.
+    """Gaussian reward for holding MLP-predicted pose when standing.
 
-    Runs the MLP to compute the target lower-body pose, then returns the
-    raw squared error (intended for use with a negative weight).
-
-    Returns zero for envs whose velocity command exceeds the threshold.
+    Returns ``exp(-error / (2 * std²))`` gated by standing condition.
+    Use with a **positive** weight.
     """
-    asset: Entity = env.scene[asset_cfg.name]
-    joint_pos = asset.data.joint_pos
-
     amo_cmd = env.command_manager.get_command(command_name)
     linear_norm = torch.norm(amo_cmd[:, :2], dim=1)
     angular_norm = torch.abs(amo_cmd[:, 2])
@@ -461,12 +457,13 @@ def stand_still(
 
     q_ref_t = _get_amo_ref_lower(env, command_name)
     if q_ref_t is None:
-        diff = joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
-        return torch.sum(torch.square(diff), dim=1) * standing_mask
+        return torch.zeros(env.num_envs, device=env.device)
 
-    q_lower = joint_pos[:, env._amo_lower_indices]
-    error = torch.sum((q_lower - q_ref_t) ** 2, dim=-1)
-    return error * standing_mask
+    asset: Entity = env.scene[asset_cfg.name]
+    q_lower = asset.data.joint_pos[:, env._amo_lower_indices]
+    error = torch.mean((q_lower - q_ref_t) ** 2, dim=-1)
+    reward = torch.exp(-error / (2.0 * std ** 2))
+    return reward * standing_mask
 
 
 def amo_ref_tracking(
@@ -474,12 +471,22 @@ def amo_ref_tracking(
     command_name: str,
     std: float,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+    command_threshold: float = 0.1,
 ) -> torch.Tensor:
     """Reward tracking the AMO MLP lower-body reference joint angles.
 
     Runs the MLP to compute the lower-body reference, then returns a
     Gaussian reward based on the L2 error.
+
+    Gated by velocity command: returns zero when standing (command below
+    threshold) so that ``stand_still`` owns the standing regime.
     """
+    amo_cmd = env.command_manager.get_command(command_name)
+    linear_norm = torch.norm(amo_cmd[:, :2], dim=1)
+    angular_norm = torch.abs(amo_cmd[:, 2])
+    total_command = linear_norm + angular_norm
+    moving_mask = (total_command > command_threshold).float()
+
     q_ref_t = _get_amo_ref_lower(env, command_name)
     if q_ref_t is None:
         return torch.zeros(env.num_envs, device=env.device)
@@ -487,6 +494,6 @@ def amo_ref_tracking(
     asset: Entity = env.scene[asset_cfg.name]
     q_lower = asset.data.joint_pos[:, env._amo_lower_indices]
 
-    error = torch.sum((q_lower - q_ref_t) ** 2, dim=-1)
-    return torch.exp(-error / (2.0 * std ** 2))
+    error = torch.mean((q_lower - q_ref_t) ** 2, dim=-1)
+    return torch.exp(-error / (2.0 * std ** 2)) * moving_mask
 

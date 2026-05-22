@@ -48,9 +48,9 @@ class AmoCommand(UniformVelocityCommand):
     def _update_command(self) -> None:
         super()._update_command()
         # Zero rpy/height for standing envs.
-        standing_env_ids = self.is_standing_env.nonzero(as_tuple=False).flatten()
-        self.rpy_command[standing_env_ids, :] = 0.0
-        self.height_command[standing_env_ids, :] = 0.0
+        # standing_env_ids = self.is_standing_env.nonzero(as_tuple=False).flatten()
+        # self.rpy_command[standing_env_ids, :] = 0.0
+        # self.height_command[standing_env_ids, :] = 0.0
 
 
 @dataclass(kw_only=True)

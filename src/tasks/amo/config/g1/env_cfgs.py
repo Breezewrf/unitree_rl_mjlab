@@ -241,8 +241,8 @@ def unitree_g1_flat_env_cfg(
         params={
             "command_name": "amo",
             "amo_stages": [
-                {"step": 5000*24, "height": (0.5, 0.8)},
-                {"step": 10000*24, "roll": (-0.2, 0.2), "pitch": (-0.2, 0.2), "yaw": (-0.2, 0.2)},
+                {"step": 5000*24, "height": (0.5, 0.785)},
+                # {"step": 10000*24, "roll": (-0.2, 0.2), "pitch": (-0.2, 0.2), "yaw": (-0.2, 0.2)},
             ],
         },
     )

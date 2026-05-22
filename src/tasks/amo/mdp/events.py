@@ -148,3 +148,22 @@ def apply_standing_upright_force(
     asset.write_external_wrench_to_sim(
         forces, torques, env_ids=None, body_ids=asset_cfg.body_ids
     )
+
+def hold_upper_body_default(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor | None,
+    asset_cfg: SceneEntityCfg,
+) -> None:
+    """Set upper-body joint position targets to default pose (PD hold).
+
+    Run as a step-mode event so the actuators' stiffness/damping hold the
+    upper body steady at the default configuration every step.
+    """
+    del env_ids  # Step-mode: runs on all envs every step.
+
+    asset = env.scene[asset_cfg.name]
+    joint_ids = asset_cfg.joint_ids
+    default_pos = asset.data.default_joint_pos[:, joint_ids]
+    encoder_bias = asset.data.encoder_bias[:, joint_ids]
+    target = default_pos - encoder_bias
+    asset.set_joint_position_target(target, joint_ids=joint_ids)
