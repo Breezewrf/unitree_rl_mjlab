@@ -441,7 +441,6 @@ def stand_still(
     env: ManagerBasedRlEnv,
     command_name: str,
     command_threshold: float = 0.1,
-    std: float = 0.3,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
     """Gaussian reward for holding MLP-predicted pose when standing.
@@ -461,8 +460,8 @@ def stand_still(
 
     asset: Entity = env.scene[asset_cfg.name]
     q_lower = asset.data.joint_pos[:, env._amo_lower_indices]
-    error = torch.mean((q_lower - q_ref_t) ** 2, dim=-1)
-    reward = torch.exp(-error / (2.0 * std ** 2))
+    diff_angle = q_lower - q_ref_t
+    reward = torch.sum(torch.square(diff_angle), dim=-1)
     return reward * standing_mask
 
 

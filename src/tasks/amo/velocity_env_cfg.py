@@ -390,7 +390,6 @@ def make_amo_env_cfg() -> ManagerBasedRlEnvCfg:
           params={
               "command_name": "amo",
               "command_threshold": 0.1,
-              "std": 0.3,
               "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
           },
       ),
