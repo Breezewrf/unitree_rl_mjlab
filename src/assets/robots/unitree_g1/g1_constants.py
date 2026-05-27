@@ -186,6 +186,37 @@ G1_ACTUATOR_ANKLE = BuiltinPositionActuatorCfg(
   armature=ACTUATOR_5020.reflected_inertia * 2,
 )
 
+# Upper-body actuator overrides for rigid PD hold (higher stiffness/damping).
+G1_ACTUATOR_UPPER_ARM = BuiltinPositionActuatorCfg(
+  target_names_expr=(
+    ".*_shoulder_pitch_joint",
+    ".*_shoulder_roll_joint",
+    ".*_shoulder_yaw_joint",
+    ".*_elbow_joint",
+    ".*_wrist_roll_joint",
+    ".*_wrist_pitch_joint",
+    ".*_wrist_yaw_joint",
+  ),
+  stiffness=60.0,
+  damping=1.5,
+  effort_limit=ACTUATOR_5020.effort_limit,
+  armature=ACTUATOR_5020.reflected_inertia,
+)
+G1_ACTUATOR_UPPER_WAIST_YAW = BuiltinPositionActuatorCfg(
+  target_names_expr=("waist_yaw_joint",),
+  stiffness=200.0,
+  damping=5.0,
+  effort_limit=ACTUATOR_7520_14.effort_limit,
+  armature=ACTUATOR_7520_14.reflected_inertia,
+)
+G1_ACTUATOR_UPPER_WAIST_RP = BuiltinPositionActuatorCfg(
+  target_names_expr=("waist_pitch_joint", "waist_roll_joint"),
+  stiffness=1200.0,
+  damping=5.0,
+  effort_limit=ACTUATOR_5020.effort_limit * 2,
+  armature=ACTUATOR_5020.reflected_inertia * 2,
+)
+
 ##
 # Keyframe config.
 ##
@@ -269,6 +300,29 @@ G1_ARTICULATION = EntityArticulationInfoCfg(
   soft_joint_pos_limit_factor=0.9,
 )
 
+# Stiff upper-body articulation for AMO task: lower body policy-controlled,
+# upper body held at default pose via high-stiffness PD actuators.
+G1_ARTICULATION_STIFF = EntityArticulationInfoCfg(
+  actuators=(
+    # Lower body (unchanged from G1_ARTICULATION).
+    G1_ACTUATOR_7520_22,   # hip_roll, knee
+    G1_ACTUATOR_ANKLE,     # ankle_pitch, ankle_roll
+    # Lower body: hip_pitch and hip_yaw only (exclude waist_yaw_joint).
+    BuiltinPositionActuatorCfg(
+      target_names_expr=(".*_hip_pitch_joint", ".*_hip_yaw_joint"),
+      stiffness=STIFFNESS_7520_14,
+      damping=DAMPING_7520_14,
+      effort_limit=ACTUATOR_7520_14.effort_limit,
+      armature=ACTUATOR_7520_14.reflected_inertia,
+    ),
+    # Upper body (stiff).
+    G1_ACTUATOR_UPPER_ARM,
+    G1_ACTUATOR_UPPER_WAIST_YAW,
+    G1_ACTUATOR_UPPER_WAIST_RP,
+  ),
+  soft_joint_pos_limit_factor=0.9,
+)
+
 
 def get_g1_robot_cfg() -> EntityCfg:
   """Get a fresh G1 robot configuration instance.
@@ -281,6 +335,20 @@ def get_g1_robot_cfg() -> EntityCfg:
     collisions=(FULL_COLLISION,),
     spec_fn=get_spec,
     articulation=G1_ARTICULATION,
+  )
+
+
+def get_g1_robot_cfg_stiff() -> EntityCfg:
+  """Get a G1 config with stiff upper-body actuators for AMO task.
+
+  Same as ``get_g1_robot_cfg`` but uses ``G1_ARTICULATION_STIFF`` which
+  has higher stiffness/damping on upper-body joints (waist, arms, wrists).
+  """
+  return EntityCfg(
+    init_state=HOME_KEYFRAME,
+    collisions=(FULL_COLLISION,),
+    spec_fn=get_spec,
+    articulation=G1_ARTICULATION_STIFF,
   )
 
 

@@ -35,6 +35,9 @@ class AmoStage(TypedDict, total=False):
   pitch: tuple[float, float] | None
   yaw: tuple[float, float] | None
 
+class DefaultPoseRatioStage(TypedDict):
+  step: int
+  ratio: float
 
 def terrain_levels_vel(
   env: ManagerBasedRlEnv,
@@ -149,4 +152,16 @@ def reward_weight(
   return torch.tensor([reward_term_cfg.weight])
 
  
- 
+def default_pose_ratio_staged(
+env: ManagerBasedRlEnv,
+env_ids: torch.Tensor | slice | None,
+action_name: str,
+stages: list[DefaultPoseRatioStage],
+) -> torch.Tensor:
+  """Set default_pose_ratio based on training step thresholds."""
+  del env_ids
+  term = env.action_manager.get_term(action_name)
+  for stage in stages:
+    if env.common_step_counter > stage["step"]:
+      term.cfg.default_pose_ratio = stage["ratio"]
+  return torch.tensor([term.cfg.default_pose_ratio])

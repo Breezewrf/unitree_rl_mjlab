@@ -1,8 +1,9 @@
 """Unitree G1 AMO environment configurations."""
 
+from src import SRC_PATH
 from src.assets.robots import (
     G1_ACTION_SCALE,
-    get_g1_robot_cfg,
+    get_g1_robot_cfg_stiff,
 )
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs import mdp as envs_mdp
@@ -15,6 +16,7 @@ from mjlab.sensor import ContactMatch, ContactSensorCfg, RayCastSensorCfg
 from src.tasks.amo.mdp.amo_command import AmoCommandCfg
 import src.tasks.amo.mdp as mdp
 from src.tasks.amo.velocity_env_cfg import make_amo_env_cfg
+from src.tasks.amo.mdp.upper_body_action import UpperBodyMotionActionCfg
 
 # AMO uses lower-body-only actions; filter out upper-body scale entries.
 _UPPER_BODY_PATTERNS = ("elbow", "shoulder", "wrist", "waist")
@@ -79,7 +81,7 @@ def unitree_g1_rough_env_cfg(
     cfg.sim.contact_sensor_maxmatch = 500
     cfg.sim.nconmax = 55
 
-    cfg.scene.entities = {"robot": get_g1_robot_cfg()}
+    cfg.scene.entities = {"robot": get_g1_robot_cfg_stiff()}
 
     # Set raycast sensor frame to G1 pelvis.
     for sensor in cfg.scene.sensors or ():
@@ -131,6 +133,17 @@ def unitree_g1_rough_env_cfg(
     assert isinstance(joint_pos_action, JointPositionActionCfg)
     joint_pos_action.scale = G1_LOWER_BODY_ACTION_SCALE
 
+    # Upper-body motion playback from ACCAD dataset.
+    # In play mode, default_pose_ratio=1.0 so all envs hold HOME_KEYFRAME.
+    motion_file = str(SRC_PATH / "assets" / "data" / "g1" / "accad_all.pkl")
+    cfg.actions["upper_body_motion"] = UpperBodyMotionActionCfg(
+        entity_name="robot",
+        motion_file=motion_file,
+        default_pose_ratio=1.0 if play else 0.1,
+        waist_yaw_only=True,
+        pose_only=True,
+    )
+    
     cfg.viewer.body_name = "torso_link"
 
     amo_cmd = cfg.commands["amo"]
@@ -187,6 +200,44 @@ def unitree_g1_rough_env_cfg(
         },
     )
 
+    # Set joint pos limits reward to only apply to lower-body joints.
+    cfg.rewards["joint_acc_l2"].params["asset_cfg"] = SceneEntityCfg(
+        "robot", joint_names=(
+        r".*_hip_pitch_joint",
+        r".*_hip_roll_joint",
+        r".*_hip_yaw_joint",
+        r".*_knee_joint",
+        r".*_ankle_pitch_joint",
+        r".*_ankle_roll_joint",
+        )
+    )
+    cfg.rewards["joint_pos_limits"].params["asset_cfg"] = SceneEntityCfg(
+        "robot", joint_names=(
+        r".*_hip_pitch_joint",
+        r".*_hip_roll_joint",
+        r".*_hip_yaw_joint",
+        r".*_knee_joint",
+        r".*_ankle_pitch_joint",
+        r".*_ankle_roll_joint",
+        )
+    )
+
+    # Curriculum
+    cfg.curriculum["default_pose_ratio"] = CurriculumTermCfg(
+        func=mdp.default_pose_ratio_staged,
+        params={
+        "action_name": "upper_body_motion",
+        "stages": [
+            {"step": 0, "ratio": 1.0},
+            {"step": 2000 * 24, "ratio": 0.8},
+            {"step": 4500 * 24, "ratio": 0.6},
+            {"step": 7500 * 24, "ratio": 0.4},
+            {"step": 11000 * 24, "ratio": 0.2},
+            {"step": 15000 * 24, "ratio": 0.05},
+        ],
+        },
+    )
+    
     # Apply play mode overrides.
     if play:
         cfg.episode_length_s = int(1e9)
