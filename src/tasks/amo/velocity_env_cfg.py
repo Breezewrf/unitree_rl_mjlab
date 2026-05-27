@@ -240,21 +240,6 @@ def make_amo_env_cfg() -> ManagerBasedRlEnvCfg:
               },
           },
       ),
-      "hold_upper_body": EventTermCfg(
-          func=mdp.hold_upper_body_default,
-          mode="step",
-          params={
-              "asset_cfg": SceneEntityCfg(
-                  "robot",
-                  joint_names=(
-                      r"(left_|right_)"
-                      r"(shoulder_pitch|shoulder_roll|shoulder_yaw|elbow"
-                      r"|wrist_roll|wrist_pitch|wrist_yaw)_joint"
-                      r"|waist_(yaw|roll|pitch)_joint" 
-                  ),
-              ),
-          },
-      ),
       "foot_friction": EventTermCfg(
           mode="startup",
           func=dr.geom_friction,
