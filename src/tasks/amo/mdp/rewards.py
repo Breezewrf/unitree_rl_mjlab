@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import numpy as np
 import torch
 
 from mjlab.entity import Entity
@@ -412,29 +411,36 @@ def _get_amo_ref_lower(
     env: ManagerBasedRlEnv,
     command_name: str,
 ) -> torch.Tensor | None:
-    """Run MLP inference and return the lower-body reference.
+    """Compute (or return cached) lower-body reference from the AMO MLP.
 
+    Rewards are computed **before** observations in the step loop, so this
+    function populates the cache.  ``amo_ref_lower`` (observation term) reads
+    from the same cache later in the same step.
+
+    The cache is invalidated when ``common_step_counter`` advances.
     Returns ``None`` if the AMO module is not loaded.
     """
     amo_module = getattr(env, "_amo_module", None)
     if amo_module is None:
         return None
 
+    # Return cached result if already computed this step.
+    cached_step = getattr(env, "_amo_ref_lower_step", -1)
+    if cached_step == env.common_step_counter:
+        return env._amo_ref_lower_cache
+
     asset: Entity = env.scene["robot"]
     joint_pos = asset.data.joint_pos
-
-    q_upper = joint_pos[:, env._amo_upper_indices].cpu().numpy()
+    q_upper = joint_pos[:, env._amo_upper_indices]
     amo_cmd = env.command_manager.get_command(command_name)
-    rpy_cmd = amo_cmd[:, 3:6].cpu().numpy()
-    h_cmd = amo_cmd[:, 6:7].cpu().numpy()
+    rpy_cmd = amo_cmd[:, 3:6]
+    h_cmd = amo_cmd[:, 6:7]
+    x = torch.cat([q_upper, rpy_cmd, h_cmd], dim=1)
+    result = amo_module.batch_predict(x)
 
-    x = np.concatenate([q_upper, rpy_cmd, h_cmd], axis=1).astype(np.float32)
-    x = (x - amo_module.in_mean) / amo_module.in_std
-    x_t = torch.from_numpy(x).to(amo_module.device)
-    with torch.no_grad():
-        y_t = amo_module.model(x_t)
-    q_ref = y_t.cpu().numpy() * amo_module.out_std + amo_module.out_mean
-    return torch.from_numpy(q_ref).float().to(env.device)
+    env._amo_ref_lower_cache = result
+    env._amo_ref_lower_step = env.common_step_counter
+    return result
 
 
 def stand_still(

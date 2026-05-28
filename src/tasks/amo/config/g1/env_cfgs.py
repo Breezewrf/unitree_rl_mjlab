@@ -34,10 +34,11 @@ def _load_amo_module(env, env_ids, checkpoint_path: str):
         _amo_module: AmoModule instance
         _amo_upper_indices: indices into robot joint_pos for checkpoint upper_names
         _amo_lower_indices: indices into robot joint_pos for checkpoint lower_names
+        _amo_ref_lower_cache: cached MLP output for the current step (None until first use)
     """
     from src.tasks.amo.mdp.amo_module import AmoModule
 
-    amo_module = AmoModule(checkpoint_path, device="cpu")
+    amo_module = AmoModule(checkpoint_path, device=env.device)
 
     asset = env.scene["robot"]
     robot_joint_names = list(asset.joint_names)
@@ -64,8 +65,10 @@ def _load_amo_module(env, env_ids, checkpoint_path: str):
     env._amo_module = amo_module
     env._amo_upper_indices = upper_indices
     env._amo_lower_indices = lower_indices
+    env._amo_ref_lower_cache = None
+    env._amo_ref_lower_step = -1
 
-    print(f"[AMO] Loaded checkpoint: {checkpoint_path}")
+    print(f"[AMO] Loaded checkpoint: {checkpoint_path} on {env.device}")
     print(f"[AMO] Upper joints ({len(upper_indices)}): {amo_module.upper_names}")
     print(f"[AMO] Lower joints ({len(lower_indices)}): {amo_module.lower_names}")
 
@@ -135,11 +138,11 @@ def unitree_g1_rough_env_cfg(
 
     # Upper-body motion playback from ACCAD dataset.
     # In play mode, default_pose_ratio=1.0 so all envs hold HOME_KEYFRAME.
-    motion_file = str(SRC_PATH / "assets" / "data" / "g1" / "accad_all.pkl")
+    motion_file = str(SRC_PATH / "assets" / "data" / "g1" / "lafan_all.pkl")
     cfg.actions["upper_body_motion"] = UpperBodyMotionActionCfg(
         entity_name="robot",
         motion_file=motion_file,
-        default_pose_ratio=1.0 if play else 0.1,
+        default_pose_ratio=0.1 if play else 0.1,
         waist_yaw_only=True,
         pose_only=True,
     )
@@ -321,8 +324,12 @@ def unitree_g1_flat_env_cfg(
     if play:
         amo_cmd = cfg.commands["amo"]
         assert isinstance(amo_cmd, AmoCommandCfg)
-        amo_cmd.ranges.lin_vel_x = (-0.5, 1.0)
-        amo_cmd.ranges.lin_vel_y = (-0.5, 0.5)
-        amo_cmd.ranges.ang_vel_z = (-0.5, 0.5)
+        amo_cmd.ranges.lin_vel_x = (0.0, 0.0)
+        amo_cmd.ranges.lin_vel_y = (0.0, 0.0)
+        amo_cmd.ranges.ang_vel_z = (0.0, 0.0)
+        amo_cmd.ranges.height = (0.78, 0.78)
+        amo_cmd.ranges.roll = (0.0, 0.0)
+        amo_cmd.ranges.pitch = (0.0, 0.0)
+        amo_cmd.ranges.yaw = (0.0, 0.0)
 
     return cfg

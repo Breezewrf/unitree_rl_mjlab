@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
-import numpy as np
 
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
@@ -53,43 +52,37 @@ def amo_ref_lower(
 ) -> torch.Tensor:
     """Return AMO MLP lower-body reference joint angles.
 
-    Reads the current upper-body joint positions, the commanded rpy + height
-    from the AMO command term, runs MLP inference on CPU, and returns the
-    predicted lower-body joint angles (12 DOF) in robot joint order.
+    During a normal step the reward manager runs first and populates the cache
+    (via ``_get_amo_ref_lower``); this function reads from it.  A fallback
+    path handles the case where the function is called before the first step
+    (e.g. during ``_prepare_terms()``).
 
     Requires ``env._amo_module`` to be set by a startup event.
     """
+    # Fast path: cache was populated earlier this step by reward computation.
+    cached_step = getattr(env, "_amo_ref_lower_step", -1)
+    if cached_step == env.common_step_counter and env._amo_ref_lower_cache is not None:
+        return env._amo_ref_lower_cache
+
     amo_module = getattr(env, "_amo_module", None)
     if amo_module is None:
         # During _prepare_terms() the startup event hasn't run yet.
-        # Return a zero tensor with the expected shape (N, 12).
         asset = env.scene[asset_cfg.name]
         return torch.zeros(asset.data.joint_pos.shape[0], 12, device=env.device)
 
+    # Fallback: compute on device (first step, or called outside normal step loop).
     asset = env.scene[asset_cfg.name]
-    joint_pos = asset.data.joint_pos  # (N, n_joints) absolute positions.
-
-    # Map robot joint positions to checkpoint's upper_names ordering.
-    upper_indices = env._amo_upper_indices  # indices into robot joint_pos
-    q_upper = joint_pos[:, upper_indices].cpu().numpy()  # (N, n_upper)
-
-    # Get rpy + height from the amo command term.
+    joint_pos = asset.data.joint_pos
+    upper_indices = env._amo_upper_indices
+    q_upper = joint_pos[:, upper_indices]
     amo_cmd = env.command_manager.get_command("amo")
-    rpy_cmd = amo_cmd[:, 3:6].cpu().numpy()  # (N, 3)
-    h_cmd = amo_cmd[:, 6:7].cpu().numpy()  # (N, 1)
+    rpy_cmd = amo_cmd[:, 3:6]
+    h_cmd = amo_cmd[:, 6:7]
+    x = torch.cat([q_upper, rpy_cmd, h_cmd], dim=1)
+    result = amo_module.batch_predict(x)
 
-    # Batched MLP inference on CPU.
-    n_envs = joint_pos.shape[0]
-    x = np.concatenate(
-        [q_upper, rpy_cmd, h_cmd], axis=1
-    ).astype(np.float32)  # (N, n_upper+4)
-    x = (x - amo_module.in_mean) / amo_module.in_std
-    x_t = torch.from_numpy(x).to(amo_module.device)
-    with torch.no_grad():
-        y_t = amo_module.model(x_t)
-    y = y_t.cpu().numpy() * amo_module.out_std + amo_module.out_mean  # (N, n_lower)
-
-    result = torch.from_numpy(y).float().to(env.device)
+    env._amo_ref_lower_cache = result
+    env._amo_ref_lower_step = env.common_step_counter
     return result
 
 

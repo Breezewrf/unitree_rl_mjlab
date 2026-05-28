@@ -130,6 +130,9 @@ class AmoModule:
     Loads a trained checkpoint and provides batched prediction of lower-body
     joint angles from (q_upper, rpy, h).  Designed to be stored on the env
     object (``env._amo_module``) and called from observation terms.
+
+    All normalization stats and the model live on ``self.device`` (typically
+    GPU) so that batched inference is a pure-tensor, no-numpy path.
     """
 
     def __init__(self, checkpoint_path: str, device: torch.device | str = "cpu"):
@@ -139,17 +142,16 @@ class AmoModule:
         self.upper_names: list[str] = list(ckpt["upper_names"])
         self.lower_names: list[str] = list(ckpt["lower_names"])
 
-        # Normalization stats as numpy (converted from tensor if needed).
-        self.in_mean = self._to_numpy(ckpt["in_mean"]).squeeze()
-        self.in_std = self._to_numpy(ckpt["in_std"]).squeeze()
-        self.out_mean = self._to_numpy(ckpt["out_mean"]).squeeze()
-        self.out_std = self._to_numpy(ckpt["out_std"]).squeeze()
+        # Normalization stats as tensors on device.
+        self.in_mean = self._to_tensor(ckpt["in_mean"]).squeeze()
+        self.in_std = self._to_tensor(ckpt["in_std"]).squeeze()
+        self.out_mean = self._to_tensor(ckpt["out_mean"]).squeeze()
+        self.out_std = self._to_tensor(ckpt["out_std"]).squeeze()
 
-    @staticmethod
-    def _to_numpy(x):
+    def _to_tensor(self, x) -> torch.Tensor:
         if torch.is_tensor(x):
-            return x.cpu().numpy()
-        return np.asarray(x)
+            return x.float().to(self.device)
+        return torch.as_tensor(x, dtype=torch.float32, device=self.device)
 
     def predict(
         self,
@@ -157,15 +159,17 @@ class AmoModule:
         rpy: np.ndarray,      # (3,)
         h: float,
     ) -> np.ndarray:
-        """Run MLP inference and return q_lower (n_lower,)."""
+        """Run MLP inference (single sample) and return q_lower (n_lower,)."""
         x = np.concatenate([q_upper, rpy, [h]]).astype(np.float32)
-        x = (x - self.in_mean) / self.in_std
         x_t = torch.from_numpy(x).unsqueeze(0).to(self.device)
+        y_t = self.batch_predict(x_t)
+        return y_t.cpu().numpy().squeeze().astype(np.float64)
+
+    def batch_predict(self, x: torch.Tensor) -> torch.Tensor:
+        """Batched MLP inference on device. Input x: (N, n_upper+4), output: (N, n_lower)."""
+        x = (x - self.in_mean) / self.in_std
         with torch.no_grad():
-            y_t = self.model(x_t)
-        y = y_t.cpu().numpy().squeeze()
-        y = y * self.out_std + self.out_mean
-        return y.astype(np.float64)
+            return self.model(x) * self.out_std + self.out_mean
 
 
 def load_amass_frames(
