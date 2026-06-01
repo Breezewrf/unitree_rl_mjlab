@@ -132,13 +132,15 @@ def make_amo_env_cfg() -> ManagerBasedRlEnvCfg:
           terms=actor_terms,
           concatenate_terms=True,
           enable_corruption=True,
-          history_length=1,
+          history_length=4,
+          flatten_history_dim=True,
       ),
       "critic": ObservationGroupCfg(
           terms=critic_terms,
           concatenate_terms=True,
           enable_corruption=False,
-          history_length=1,
+          history_length=4,
+          flatten_history_dim=True,
       ),
   }
 

@@ -17,6 +17,7 @@ def _is_lateral_or_yaw_joint(joint_name: str) -> bool:
 class _TermSlice:
   start: int
   end: int
+  base_dim: int
 
 
 class _SymmetryAugmentor:
@@ -25,18 +26,16 @@ class _SymmetryAugmentor:
   def __init__(self, env: Any):
     self._env = env
     self._device = torch.device(env.device)
-    self._joint_index_map, self._joint_sign_mask = self._build_joint_mirror()
+    self._action_index_map, self._action_sign_mask = self._build_action_mirror()
+    self._joint_index_map, self._joint_sign_mask = self._build_robot_joint_mirror()
     self._slices = self._build_term_slices()
 
-  def _build_joint_mirror(self) -> tuple[torch.Tensor, torch.Tensor]:
-    joint_action = self._env.unwrapped.action_manager.get_term("joint_pos")
-    joint_names = list(joint_action.target_names)
-
-    name_to_idx = {name: idx for idx, name in enumerate(joint_names)}
+  def _build_name_mirror(self, names: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+    name_to_idx = {name: idx for idx, name in enumerate(names)}
     mapped_indices: list[int] = []
     signs: list[float] = []
 
-    for name in joint_names:
+    for name in names:
       if name.startswith("left_"):
         mirror_name = "right_" + name[len("left_") :]
       elif name.startswith("right_"):
@@ -52,6 +51,14 @@ class _SymmetryAugmentor:
       torch.tensor(signs, device=self._device, dtype=torch.float32),
     )
 
+  def _build_action_mirror(self) -> tuple[torch.Tensor, torch.Tensor]:
+    joint_action = self._env.unwrapped.action_manager.get_term("joint_pos")
+    return self._build_name_mirror(list(joint_action.target_names))
+
+  def _build_robot_joint_mirror(self) -> tuple[torch.Tensor, torch.Tensor]:
+    robot = self._env.unwrapped.scene["robot"]
+    return self._build_name_mirror(list(robot.joint_names))
+
   def _build_term_slices(self) -> dict[str, dict[str, _TermSlice]]:
     manager = self._env.unwrapped.observation_manager
     slices: dict[str, dict[str, _TermSlice]] = {}
@@ -62,11 +69,20 @@ class _SymmetryAugmentor:
       offset = 0
       for term_name, term_dim in zip(term_names, term_dims, strict=False):
         flat_dim = int(torch.tensor(term_dim).prod().item())
-        group_slices[term_name] = _TermSlice(offset, offset + flat_dim)
+        base_dim = flat_dim
+        term_cfg = manager.get_term_cfg(group_name, term_name)
+        history_length = int(getattr(term_cfg, "history_length", 0) or 0)
+        flatten_history_dim = bool(getattr(term_cfg, "flatten_history_dim", True))
+        if history_length > 0 and flatten_history_dim and flat_dim % history_length == 0:
+          base_dim = flat_dim // history_length
+        group_slices[term_name] = _TermSlice(offset, offset + flat_dim, base_dim)
         offset += flat_dim
       slices[group_name] = group_slices
 
     return slices
+
+  def _mirror_action_like(self, tensor: torch.Tensor) -> torch.Tensor:
+    return tensor[..., self._action_index_map] * self._action_sign_mask
 
   def _mirror_joint_like(self, tensor: torch.Tensor) -> torch.Tensor:
     return tensor[..., self._joint_index_map] * self._joint_sign_mask
@@ -94,7 +110,7 @@ class _SymmetryAugmentor:
       mirrored[..., 1] = -mirrored[..., 1]
     return mirrored
 
-  def _mirror_term(self, term_name: str, values: torch.Tensor) -> torch.Tensor:
+  def _mirror_single_frame_term(self, term_name: str, values: torch.Tensor) -> torch.Tensor:
     mirrored = values.clone()
 
     if term_name == "base_lin_vel":
@@ -120,9 +136,17 @@ class _SymmetryAugmentor:
     if term_name == "phase":
       return self._mirror_phase(mirrored)
 
-    if term_name in ("joint_pos", "joint_vel", "actions"):
+    if term_name in ("joint_pos", "joint_vel"):
       if mirrored.shape[-1] == self._joint_index_map.shape[0]:
         return self._mirror_joint_like(mirrored)
+      return mirrored
+
+    if term_name == "actions":
+      n_actions = self._action_index_map.shape[0]
+      if mirrored.shape[-1] == n_actions:
+        return self._mirror_action_like(mirrored)
+      if mirrored.shape[-1] >= n_actions:
+        mirrored[..., :n_actions] = self._mirror_action_like(mirrored[..., :n_actions])
       return mirrored
 
     if term_name == "base_orientation":
@@ -134,15 +158,15 @@ class _SymmetryAugmentor:
       return mirrored
 
     if term_name == "amo_ref_lower":
-      if mirrored.shape[-1] == self._joint_index_map.shape[0]:
-        return self._mirror_joint_like(mirrored)
+      if mirrored.shape[-1] == self._action_index_map.shape[0]:
+        return self._mirror_action_like(mirrored)
       return mirrored
 
     if term_name == "whole_body_actions":
       # Mirror lower-body part (first n_joints dims), leave upper-body zeros.
-      n_joints = self._joint_index_map.shape[0]
+      n_joints = self._action_index_map.shape[0]
       if mirrored.shape[-1] >= n_joints:
-        mirrored[..., :n_joints] = self._mirror_joint_like(mirrored[..., :n_joints])
+        mirrored[..., :n_joints] = self._mirror_action_like(mirrored[..., :n_joints])
       return mirrored
 
     if term_name in ("foot_height", "foot_air_time", "foot_contact") and mirrored.shape[-1] >= 2:
@@ -150,6 +174,13 @@ class _SymmetryAugmentor:
       return mirrored
 
     return mirrored
+
+  def _mirror_term(self, term_name: str, values: torch.Tensor, base_dim: int) -> torch.Tensor:
+    if base_dim > 0 and values.shape[-1] != base_dim and values.shape[-1] % base_dim == 0:
+      history_length = values.shape[-1] // base_dim
+      values_h = values.reshape(*values.shape[:-1], history_length, base_dim)
+      return self._mirror_single_frame_term(term_name, values_h).reshape_as(values)
+    return self._mirror_single_frame_term(term_name, values)
 
   def mirror_observations(self, obs: TensorDict) -> TensorDict:
     mirrored_obs = obs.clone()
@@ -164,7 +195,9 @@ class _SymmetryAugmentor:
       updated = group_tensor.clone()
       for term_name, term_slice in group_terms.items():
         chunk = group_tensor[:, term_slice.start : term_slice.end]
-        updated[:, term_slice.start : term_slice.end] = self._mirror_term(term_name, chunk)
+        updated[:, term_slice.start : term_slice.end] = self._mirror_term(
+          term_name, chunk, term_slice.base_dim
+        )
 
       mirrored_obs[group_name] = updated
 
@@ -185,7 +218,7 @@ class _SymmetryAugmentor:
 
     out_actions: torch.Tensor | None = None
     if actions is not None:
-      mirrored_actions = self._mirror_joint_like(actions)
+      mirrored_actions = self._mirror_action_like(actions)
       out_actions = torch.cat((actions, mirrored_actions), dim=0)
 
     return out_obs, out_actions
