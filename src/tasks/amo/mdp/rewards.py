@@ -471,34 +471,91 @@ def stand_still(
     return reward * standing_mask
 
 
-def amo_ref_tracking(
+class amo_ref_tracking:
+  """Reward tracking the AMO MLP lower-body reference joint angles.
+
+  Uses speed-dependent standard deviations like ``variable_posture``:
+    - ``std_standing`` when the command is below ``command_threshold``.
+    - ``std`` when the command is above ``command_threshold``.
+
+  Both std params may be either a scalar or a dict mapping joint-name regex
+  patterns to per-joint standard deviations.
+  """
+
+  def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):
+    del env  # Unused.
+    self._std_configs = {
+      "standing": cfg.params.get("std_standing", 0.05),
+      "moving": cfg.params["std"],
+    }
+    self._std_tensors: dict[str, torch.Tensor] = {}
+    self._std_tensor_meta: dict[str, tuple[tuple[str, ...], torch.device, torch.dtype]] = {}
+
+  def _resolve_std(
+    self,
+    env: ManagerBasedRlEnv,
+    joint_names: list[str],
+    dtype: torch.dtype,
+    regime: str,
+  ) -> torch.Tensor:
+    std_cfg = self._std_configs[regime]
+    joint_names_tuple = tuple(str(name) for name in joint_names)
+    device = torch.device(env.device)
+    meta = (joint_names_tuple, device, dtype)
+    if self._std_tensor_meta.get(regime) != meta:
+      if isinstance(std_cfg, dict):
+        _, _, std = resolve_matching_names_values(
+          data=std_cfg,
+          list_of_strings=joint_names_tuple,
+        )
+      else:
+        std = [float(std_cfg)] * len(joint_names_tuple)
+      self._std_tensors[regime] = torch.tensor(std, device=device, dtype=dtype)
+      self._std_tensor_meta[regime] = meta
+    return self._std_tensors[regime]
+
+  def __call__(
+    self,
     env: ManagerBasedRlEnv,
     command_name: str,
-    std: float,
+    std: float | dict[str, float],
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
     command_threshold: float = 0.1,
-) -> torch.Tensor:
-    """Reward tracking the AMO MLP lower-body reference joint angles.
+    std_standing: float | dict[str, float] = 0.05,
+  ) -> torch.Tensor:
+    del std, std_standing  # Resolved once from cfg in __init__.
 
-    Runs the MLP to compute the lower-body reference, then returns a
-    Gaussian reward based on the L2 error.
-
-    Gated by velocity command: returns zero when standing (command below
-    threshold) so that ``stand_still`` owns the standing regime.
-    """
     amo_cmd = env.command_manager.get_command(command_name)
     linear_norm = torch.norm(amo_cmd[:, :2], dim=1)
     angular_norm = torch.abs(amo_cmd[:, 2])
     total_command = linear_norm + angular_norm
+    standing_mask = (total_command <= command_threshold).float()
     moving_mask = (total_command > command_threshold).float()
 
     q_ref_t = _get_amo_ref_lower(env, command_name)
     if q_ref_t is None:
-        return torch.zeros(env.num_envs, device=env.device)
+      return torch.zeros(env.num_envs, device=env.device)
 
     asset: Entity = env.scene[asset_cfg.name]
     q_lower = asset.data.joint_pos[:, env._amo_lower_indices]
+    error_squared = torch.square(q_lower - q_ref_t)
 
-    error = torch.mean((q_lower - q_ref_t) ** 2, dim=-1)
-    return torch.exp(-error / (2.0 * std ** 2)) * moving_mask
+    amo_module = getattr(env, "_amo_module")
+    standing_std = self._resolve_std(
+      env,
+      amo_module.lower_names,
+      error_squared.dtype,
+      "standing",
+    )
+    moving_std = self._resolve_std(
+      env,
+      amo_module.lower_names,
+      error_squared.dtype,
+      "moving",
+    )
+    std_tensor = (
+      standing_std * standing_mask.unsqueeze(1)
+      + moving_std * moving_mask.unsqueeze(1)
+    )
 
+    return torch.exp(-torch.mean(error_squared / (std_tensor**2), dim=-1))

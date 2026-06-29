@@ -25,7 +25,22 @@ G1_LOWER_BODY_ACTION_SCALE = {
     for k, v in G1_ACTION_SCALE.items()
     if not any(p in k for p in _UPPER_BODY_PATTERNS)
 }
-
+# AMO_REF_TRACKING_STD = {
+#     r".*hip_pitch.*": 0.5,
+#     r".*hip_roll.*": 0.15,
+#     r".*hip_yaw.*": 0.15,
+#     r".*knee.*": 0.3,
+#     r".*ankle_pitch.*": 0.3,
+#     r".*ankle_roll.*": 0.3,
+# }
+AMO_REF_TRACKING_STD = {
+    r".*hip_pitch.*": 0.5,
+    r".*hip_roll.*": 0.15,
+    r".*hip_yaw.*": 0.15,
+    r".*knee.*": 0.5,
+    r".*ankle_pitch.*": 0.15,
+    r".*ankle_roll.*": 0.1,
+}
 
 def _load_amo_module(env, env_ids, checkpoint_path: str):
     """Startup event: load AMO MLP checkpoint and build joint index mappings.
@@ -75,7 +90,7 @@ def _load_amo_module(env, env_ids, checkpoint_path: str):
 
 def unitree_g1_rough_env_cfg(
     play: bool = False,
-    checkpoint_path: str = "src/tasks/amo/mdp/amo_module.pt",
+    checkpoint_path: str = "src/tasks/amo/mdp/amo_module_v2.pt",
 ) -> ManagerBasedRlEnvCfg:
     """Create Unitree G1 rough terrain AMO configuration."""
     cfg = make_amo_env_cfg()
@@ -138,11 +153,11 @@ def unitree_g1_rough_env_cfg(
 
     # Upper-body motion playback from ACCAD dataset.
     # In play mode, default_pose_ratio=1.0 so all envs hold HOME_KEYFRAME.
-    motion_file = str(SRC_PATH / "assets" / "data" / "g1" / "lafan_all.pkl")
+    motion_file = str(SRC_PATH / "assets" / "data" / "g1" / "accad_all_g1_clean.pkl")
     cfg.actions["upper_body_motion"] = UpperBodyMotionActionCfg(
         entity_name="robot",
         motion_file=motion_file,
-        default_pose_ratio=0.1 if play else 0.1,
+        default_pose_ratio=1.0 if play else 0.1,
         waist_yaw_only=True,
         pose_only=True,
     )
@@ -198,7 +213,8 @@ def unitree_g1_rough_env_cfg(
         weight=0.5,
         params={
             "command_name": "amo",
-            "std": 0.3,
+            "std_standing": 0.05,
+            "std": AMO_REF_TRACKING_STD,
             "asset_cfg": SceneEntityCfg("robot"),
         },
     )
@@ -265,7 +281,7 @@ def unitree_g1_rough_env_cfg(
 
 def unitree_g1_flat_env_cfg(
     play: bool = False,
-    checkpoint_path: str = "src/tasks/amo/mdp/amo_module.pt",
+    checkpoint_path: str = "src/tasks/amo/mdp/amo_module_v2.pt",
 ) -> ManagerBasedRlEnvCfg:
     """Create Unitree G1 flat terrain AMO configuration."""
     cfg = unitree_g1_rough_env_cfg(play=play, checkpoint_path=checkpoint_path)
@@ -296,7 +312,7 @@ def unitree_g1_flat_env_cfg(
             "command_name": "amo",
             "amo_stages": [
                 {"step": 5000*24, "height": (0.5, 0.785)},
-                # {"step": 10000*24, "roll": (-0.2, 0.2), "pitch": (-0.2, 0.2), "yaw": (-0.2, 0.2)},
+                # {"step": 10000*24, "roll": (-0.2, 0.2), "pitch": (-0.2, 0.2), "yaw": (-0.2, 0.2)}, # Disabled RPY command curriculum
             ],
         },
     )
@@ -316,7 +332,7 @@ def unitree_g1_flat_env_cfg(
         params={
             "reward_name": "track_rpy",
             "weight_stages": [
-                {"step": 10000*24, "weight": 0.5},
+                {"step": 20000*24, "weight": 0.0}, # Disabled RPY Tracking
             ],
         },
     )
@@ -324,12 +340,8 @@ def unitree_g1_flat_env_cfg(
     if play:
         amo_cmd = cfg.commands["amo"]
         assert isinstance(amo_cmd, AmoCommandCfg)
-        amo_cmd.ranges.lin_vel_x = (0.0, 0.0)
-        amo_cmd.ranges.lin_vel_y = (0.0, 0.0)
-        amo_cmd.ranges.ang_vel_z = (0.0, 0.0)
-        amo_cmd.ranges.height = (0.78, 0.78)
-        amo_cmd.ranges.roll = (0.0, 0.0)
-        amo_cmd.ranges.pitch = (0.0, 0.0)
-        amo_cmd.ranges.yaw = (0.0, 0.0)
+        amo_cmd.ranges.lin_vel_x = (-0.5, 1.0)
+        amo_cmd.ranges.lin_vel_y = (-0.5, 0.5)
+        amo_cmd.ranges.ang_vel_z = (-0.5, 0.5)
 
     return cfg
