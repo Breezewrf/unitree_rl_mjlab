@@ -4,7 +4,8 @@
 ## ✳️ Overview
 Unitree RL Mjlab is a reinforcement learning project built upon the
 [mjlab](https://github.com/mujocolab/mjlab.git), using MuJoCo as its 
-physics simulation backend, currently supporting Unitree Go2, A2, As2, G1, R1, H1_2 and H2.
+physics simulation backend, currently supporting Unitree Go2, A2, As2, G1, R1,
+H1_2 and H2, as well as Agibot X2.
 
 Mjlab combines [Isaac Lab](https://github.com/isaac-sim/IsaacLab)'s proven API
 with best-in-class [MuJoCo](https://github.com/google-deepmind/mujoco_warp)
@@ -62,6 +63,7 @@ Available velocity tracking tasks:
   - Unitree-H1_2-Flat
   - Unitree-A2-Flat
   - Unitree-R1-Flat
+  - Agibot-X2-Flat
 
 > [!NOTE]
 > For more details, refer to the mjlab documentation:
@@ -69,7 +71,7 @@ Available velocity tracking tasks:
 
 ### 2. Motion Imitation Training
 
-Train a Unitree G1 to mimic reference motion sequences.
+Train a Unitree G1 or Agibot X2 to mimic reference motion sequences.
 
 <div style="margin-left: 20px;">
 
@@ -83,10 +85,14 @@ python scripts/csv_to_npz.py \
 --output-name dance1_subject2.npz \
 --input-fps 30 \
 --output-fps 50 \
---robot g1 # g1 or g1_23dof
+--robot g1 # g1, g1_23dof, or x2
 ```
 
-**npz files will be stored at:**：`src/motions/g1/...`
+For X2, the CSV must contain 7 root-state columns followed by 31 joint columns
+in `X2_CSV_JOINT_NAMES` order. The converter removes the final two head joints
+and writes a 29-DoF tracking motion.
+
+**npz files will be stored at:** `src/assets/motions/<robot>/...`
 
 #### 2.2 Training
 
@@ -99,6 +105,7 @@ python scripts/train.py Unitree-G1-Tracking-No-State-Estimation --motion_file=sr
 Available tasks:
   - Unitree-G1-Tracking-No-State-Estimation
   - Unitree-G1-23Dof-Tracking-No-State-Estimation
+  - Agibot-X2-Tracking-No-State-Estimation
 
 </div>
 
@@ -136,6 +143,24 @@ python scripts/play.py Unitree-G1-Tracking-No-State-Estimation --motion_file=src
 **Note**：
 
 - During training, policy.onnx and policy.onnx.data are also exported for deployment onto physical robots.
+
+#### 3.1 Export a Bundled Tracking ONNX
+
+To embed a reference motion and timestep lookup into a trained tracking policy,
+pass either its `.pt` checkpoint or its policy-only `.onnx` file:
+
+```bash
+python scripts/export_tracking_onnx.py \
+--checkpoint-file logs/rsl_rl/x2_tracking/2026-07-21_17-21-55/model_30000.pt \
+--motion-file src/assets/motions/x2/x2_motion.npz \
+--output-file logs/rsl_rl/x2_tracking/2026-07-21_17-21-55/x2_motion.onnx \
+--task Agibot-X2-Tracking \
+--device cpu
+```
+
+The motion file may be `.npz` or `.csv`. The exported model accepts `obs` and
+`time_step`, and returns `actions` together with the joint and body reference
+motion for that timestep.
 
 **Visualization**：
 

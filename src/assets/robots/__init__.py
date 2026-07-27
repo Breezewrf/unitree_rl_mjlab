@@ -44,3 +44,16 @@ from .unitree_h2.h2_constants import (
 from .unitree_h2.h2_constants import (
   get_h2_robot_cfg as get_h2_robot_cfg,
 )
+
+from .agibot_x2.x2_constants import (
+  X2_ACTION_SCALE as X2_ACTION_SCALE,
+)
+from .agibot_x2.x2_constants import (
+  X2_CSV_JOINT_NAMES as X2_CSV_JOINT_NAMES,
+)
+from .agibot_x2.x2_constants import (
+  X2_JOINT_NAMES as X2_JOINT_NAMES,
+)
+from .agibot_x2.x2_constants import (
+  get_x2_robot_cfg as get_x2_robot_cfg,
+)

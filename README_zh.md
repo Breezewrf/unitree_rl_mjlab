@@ -4,7 +4,8 @@
 ## ✳️ 概述
 
 Unitree RL Mjlab 是一个基于 [mjlab](https://github.com/mujocolab/mjlab.git) 构建的强化学习项目，
-使用 MuJoCo 作为物理仿真后端，当前支持 Unitree Go2, A2, As2, G1, R1, H1_2 和 H2 机器人。
+使用 MuJoCo 作为物理仿真后端，当前支持 Unitree Go2、A2、As2、G1、R1、H1_2、H2
+以及 Agibot X2 机器人。
 
 Mjlab 结合了 [Isaac Lab](https://github.com/isaac-sim/IsaacLab) 的成熟高层 API 与 
 [MuJoCo](https://github.com/google-deepmind/mujoco_warp) 的高精度物理引擎，
@@ -60,6 +61,7 @@ python scripts/train.py Unitree-G1-Flat \
   - Unitree-H1_2-Flat
   - Unitree-A2-Flat
   - Unitree-R1-Flat
+  - Agibot-X2-Flat
 
 > [!NOTE]
 > 更多有关详细说明，请参阅 mjlab 文档
@@ -67,7 +69,7 @@ python scripts/train.py Unitree-G1-Flat \
 
 ### 2. 动作模仿训练
 
-训练 Unitree G1 模仿参考动作序列。
+训练 Unitree G1 或 Agibot X2 模仿参考动作序列。
 
 <div style="margin-left: 20px;">
 
@@ -81,10 +83,13 @@ python scripts/csv_to_npz.py \
 --output-name dance1_subject2.npz \
 --input-fps 30 \
 --output-fps 50 \
---robot g1 # g1 or g1_23dof
+--robot g1 # g1、g1_23dof 或 x2
 ```
 
-**npz文件默认保存路径为**：`src/motions/g1/...`
+X2 CSV 需要包含 7 列根状态和按 `X2_CSV_JOINT_NAMES` 排列的 31 列关节角。
+转换器会移除最后两个头部关节，输出 29-DoF tracking 动作。
+
+**npz文件默认保存路径为**：`src/assets/motions/<robot>/...`
 
 #### 2.2 训练
 
@@ -97,6 +102,7 @@ python scripts/train.py Unitree-G1-Tracking-No-State-Estimation --motion_file=sr
 可用任务:
   - Unitree-G1-Tracking-No-State-Estimation
   - Unitree-G1-23Dof-Tracking-No-State-Estimation
+  - Agibot-X2-Tracking-No-State-Estimation
 
 </div>
 
@@ -134,6 +140,23 @@ python scripts/play.py Unitree-G1-Tracking-No-State-Estimation --motion_file=src
 **说明**：
 
 - 训练时在每次保存模型时会同步导出 policy.onnx 文件在同层目录下，可用于实物部署。
+
+#### 3.1 导出内置 Reference Motion 的 Tracking ONNX
+
+可以将训练得到的 `.pt` checkpoint 或纯策略 `.onnx` 与 reference motion
+打包成一个支持 timestep 查询的 ONNX：
+
+```bash
+python scripts/export_tracking_onnx.py \
+--checkpoint-file logs/rsl_rl/x2_tracking/2026-07-21_17-21-55/model_30000.pt \
+--motion-file src/assets/motions/x2/x2_motion.npz \
+--output-file logs/rsl_rl/x2_tracking/2026-07-21_17-21-55/x2_motion.onnx \
+--task Agibot-X2-Tracking \
+--device cpu
+```
+
+motion 文件支持 `.npz` 或 `.csv`。导出模型接收 `obs` 和 `time_step`，输出
+`actions` 以及该 timestep 对应的关节和刚体 reference motion。
 
 **效果**：
 
@@ -231,4 +254,3 @@ cd deploy/robots/g1/build
 - [rsl_rl](https://github.com/leggedrobotics/rsl_rl.git): 强化学习算法实现。
 - [mujoco_warp](https://github.com/google-deepmind/mujoco_warp.git): 提供 GPU 加速渲染与仿真接口。
 - [mujoco](https://github.com/google-deepmind/mujoco.git): 提供强大仿真功能。
-

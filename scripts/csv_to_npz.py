@@ -1,17 +1,15 @@
-from typing import Any
+import os
+from typing import Any, Literal
 
 import numpy as np
 import torch
 import tyro
-import os
 from tqdm import tqdm
 
 import mjlab
 from mjlab.entity import Entity
 from mjlab.scene import Scene
 from mjlab.sim.sim import Simulation, SimulationCfg
-from src.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env_cfg
-from src.tasks.tracking.config.g1_23dof.env_cfgs import unitree_g1_23dof_flat_tracking_env_cfg
 from mjlab.utils.lab_api.math import (
   axis_angle_from_quat,
   quat_conjugate,
@@ -21,14 +19,23 @@ from mjlab.utils.lab_api.math import (
 from mjlab.viewer.offscreen_renderer import OffscreenRenderer
 from mjlab.viewer.viewer_config import ViewerConfig
 
+from src.assets.robots import X2_CSV_JOINT_NAMES, X2_JOINT_NAMES
+from src.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env_cfg
+from src.tasks.tracking.config.g1_23dof.env_cfgs import (
+  unitree_g1_23dof_flat_tracking_env_cfg,
+)
+from src.tasks.tracking.config.x2.env_cfgs import agibot_x2_flat_tracking_env_cfg
+
 
 class MotionLoader:
   def __init__(
     self,
     motion_file: str,
-    input_fps: int,
-    output_fps: int,
+    input_fps: float,
+    output_fps: float,
     device: torch.device | str,
+    csv_joint_names: tuple[str, ...],
+    joint_names: tuple[str, ...],
     line_range: tuple[int, int] | None = None,
   ):
     self.motion_file = motion_file
@@ -38,6 +45,8 @@ class MotionLoader:
     self.output_dt = 1.0 / self.output_fps
     self.current_idx = 0
     self.device = device
+    self.csv_joint_names = csv_joint_names
+    self.joint_names = joint_names
     self.line_range = line_range
     self._load_motion()
     self._interpolate_motion()
@@ -63,7 +72,19 @@ class MotionLoader:
     self.motion_base_rots_input = self.motion_base_rots_input[
       :, [3, 0, 1, 2]
     ]  # convert to wxyz
-    self.motion_dof_poss_input = motion[:, 7:]
+    input_joint_pos = motion[:, 7:]
+    if input_joint_pos.shape[1] != len(self.csv_joint_names):
+      raise ValueError(
+        f"{self.motion_file}: expected {len(self.csv_joint_names)} joint columns "
+        f"after the 7 root-state columns, got {input_joint_pos.shape[1]}"
+      )
+    missing_joint_names = set(self.joint_names).difference(self.csv_joint_names)
+    if missing_joint_names:
+      raise ValueError(
+        f"Target joints are absent from the CSV layout: {sorted(missing_joint_names)}"
+      )
+    joint_indexes = [self.csv_joint_names.index(name) for name in self.joint_names]
+    self.motion_dof_poss_input = input_joint_pos[:, joint_indexes]
 
     self.input_frames = motion.shape[0]
     self.duration = (self.input_frames - 1) * self.input_dt
@@ -193,12 +214,17 @@ def run_sim(
   render,
   line_range,
   renderer: OffscreenRenderer | None = None,
+  csv_joint_names: tuple[str, ...] | None = None,
 ):
+  joint_names = tuple(joint_names)
+  csv_joint_names = csv_joint_names or joint_names
   motion = MotionLoader(
     motion_file=input_file,
     input_fps=input_fps,
     output_fps=output_fps,
     device=sim.device,
+    csv_joint_names=csv_joint_names,
+    joint_names=joint_names,
     line_range=line_range,
   )
 
@@ -310,7 +336,7 @@ def run_sim(
 
 
 def main(
-  robot: str,
+  robot: Literal["g1", "g1_23dof", "x2"],
   input_file: str,
   output_name: str,
   input_fps: float = 30.0,
@@ -322,6 +348,7 @@ def main(
   """Replay motion from CSV file and output to npz file.
 
   Args:
+    robot: Robot and CSV joint layout to use.
     input_file: Path to the input CSV file.
     output_name: Path to the output npz file.
     input_fps: Frame rate of the CSV file.
@@ -332,9 +359,9 @@ def main(
   """
   sim_cfg = SimulationCfg()
   sim_cfg.mujoco.timestep = 1.0 / output_fps
-  if robot == "g1":    # 29 Dof
+  if robot == "g1":  # 29 DoF
     scene = Scene(unitree_g1_flat_tracking_env_cfg().scene, device=device)
-    joint_names=[
+    joint_names = (
       "left_hip_pitch_joint",
       "left_hip_roll_joint",
       "left_hip_yaw_joint",
@@ -364,11 +391,12 @@ def main(
       "right_wrist_roll_joint",
       "right_wrist_pitch_joint",
       "right_wrist_yaw_joint",
-    ]
+    )
+    csv_joint_names = joint_names
     output_dir = "./src/assets/motions/g1"
   elif robot == "g1_23dof":
     scene = Scene(unitree_g1_23dof_flat_tracking_env_cfg().scene, device=device)
-    joint_names=[    # 23 Dof
+    joint_names = (  # 23 DoF
       "left_hip_pitch_joint",
       "left_hip_roll_joint",
       "left_hip_yaw_joint",
@@ -392,8 +420,14 @@ def main(
       "right_shoulder_yaw_joint",
       "right_elbow_joint",
       "right_wrist_roll_joint",
-    ]
+    )
+    csv_joint_names = joint_names
     output_dir = "./src/assets/motions/g1_23dof"
+  elif robot == "x2":
+    scene = Scene(agibot_x2_flat_tracking_env_cfg().scene, device=device)
+    joint_names = X2_JOINT_NAMES
+    csv_joint_names = X2_CSV_JOINT_NAMES
+    output_dir = "./src/assets/motions/x2"
   else:
     raise ValueError(f"Unsupported robot: {robot}")
 
@@ -435,6 +469,7 @@ def main(
     render=render,
     line_range=line_range,
     renderer=renderer,
+    csv_joint_names=csv_joint_names,
   )
 
 
