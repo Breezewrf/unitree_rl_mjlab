@@ -213,7 +213,6 @@ def unitree_g1_rough_env_cfg(
         weight=0.5,
         params={
             "command_name": "amo",
-            "std_standing": 0.05,
             "std": AMO_REF_TRACKING_STD,
             "asset_cfg": SceneEntityCfg("robot"),
         },
